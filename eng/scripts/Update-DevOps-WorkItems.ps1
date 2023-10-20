@@ -3,13 +3,13 @@ param (
   [string] $pkgFilter = $null,
   [bool] $updateAllVersions = $false, # When false only updates the versions in the preview and ga in csv
   [string] $github_pat = $env:GITHUB_PAT,
-  [string] $devops_pat = $env:DEVOPS_PAT
+  [string] $devops_pat = $env:DEVOPS_PAT,
+  [bool] $ignoreReleasePlannerTests = $true
 )
 Set-StrictMode -Version 3
-$ErrorActionPreference = "Continue"
 
 . (Join-Path $PSScriptRoot PackageList-Helpers.ps1)
-. (Join-Path $PSScriptRoot .. common scripts helpers DevOps-WorkItem-Helpers.ps1)
+. (Join-Path $PSScriptRoot .. common scripts Helpers DevOps-WorkItem-Helpers.ps1)
 
 if (!(Get-Command az -ErrorAction SilentlyContinue)) {
   Write-Error 'You must have the Azure CLI installed: https://aka.ms/azure-cli'
@@ -160,9 +160,10 @@ function ParseVersionsFromTags($versionsFromTags, $existingShippedVersionSet)
       $d = $existingShippedVersionSet[$v.RawVersion].Date
     }
     # if we don't have a cached value or the cached value is Unknown look at the
-    # release tag to try and get a date
-    if ($d -eq "Unknown" -and $v.Date -is [DateTime]) {
-      $d = $v.Date.ToString("MM/dd/yyyy")
+    # release tag to try and get a date if we have one
+    $tagDate = $v.Date -as [DateTime]
+    if ($d -eq "Unknown" -and $tagDate) {
+      $d = $tagDate.ToString("MM/dd/yyyy")
     }
     $versionList += New-Object PSObject -Property @{
       Type = $v.VersionType
@@ -218,7 +219,8 @@ function RefreshItems()
     $pkg = $null
     $versions = $null
 
-    if ($pkgInfo) {
+    # If the csv entry is marked as "Needs Review" we want to prefer the data in the workitem over the data in csv
+    if ($pkgInfo -and $pkgInfo.PackageInfo.Notes -ne "Needs Review") {
       if ($pkgInfo.VersionGroups.ContainsKey($verMajorMinor)) {
         $versions = $pkgInfo.VersionGroups[$verMajorMinor].Versions
       }
@@ -317,7 +319,7 @@ function RefreshItems()
     $allVersionValues[$pkgLang][$pkgName] += $($updatedWI.fields["Custom.PackagePatchVersions"]) + "|"
   }
 
-  ## Loop over all packages in csv
+  ## Loop over all packages marked as New in CSV files
   foreach ($pkgLang in $allVersions.Keys)
   {
     foreach ($pkgName in $allVersions[$pkgLang].Keys)
@@ -357,7 +359,7 @@ function RefreshItems()
         $today = [DateTime](Get-Date -Format "MM/dd/yyyy")
         foreach ($pkgVersionValue in $pkgVersionValues) {
           $ver, $date = $pkgVersionValue.Split(",")
-          if (($date -as [DateTime]) -gt $today) {
+          if (($date -as [DateTime]) -ge $today) {
             $pkgPlannedVersions[$ver] = New-Object PSObject -Property @{
               Version = $ver
               Date = ([DateTime]$date).Tostring("MM/dd/yyyy")
