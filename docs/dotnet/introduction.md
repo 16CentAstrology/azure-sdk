@@ -427,7 +427,7 @@ Most methods in Azure SDK libraries should be named following the typical .NET m
 
 ##### Cancellation
 
-{% include requirement/MUST id="dotnet-service-methods-cancellation" %} ensure all service methods, both asynchronous and synchronous, take an optional `CancellationToken` parameter called _cancellationToken_.
+{% include requirement/MUST id="dotnet-service-methods-cancellation" %} ensure all service methods, both asynchronous and synchronous, take an optional `CancellationToken` parameter called _cancellationToken_ or, in case of protocol methods, an optional `RequestContext` parameter called _context_.
 
 The token should be further passed to all calls that take a cancellation token. DO NOT check the token manually, except when running a significant amount of CPU-bound work within the library, e.g. a loop that can take more than a typical network call.
 
@@ -642,8 +642,10 @@ BlobBaseClient client = ...
 
 {% include requirement/MUST id="dotnet-lro-waituntil" %} take ```WaitUntil``` as the first parameter to LRO methods.
 
+{% include requirement/MUST id="dotnet-lro-waituntil" %} put methods that cannot be called until after the long-running operation has started on the subclass of ```Operation<T>```.  For example, if a service provides an API to cancel an operation, the ```Cancel``` method should appear on the subclass of ```Operation```.
+
 {% include requirement/MAY id="dotnet-lro-subclass" %} add additional APIs to subclasses of ```Operation<T>```.
-For example, some subclasses add a constructor allowing to create an operation instance from a previously saved operation ID. Also, some subclasses are more granular states besides the IsCompleted and HasValue states that are present on the base class.
+For example, some subclasses add a constructor allowing to create an operation instance from a previously saved operation ID.  Some service operations have intermediate states they pass through prior to completion.  These can be represented with an added ```Status``` property to augment the ```HasCompleted``` property on the base ```Operation``` type.
 
 {% include requirement/MUST id="dotnet-lro-constructor" %} provide a public constructor on subclasses of ```Operation<T>``` to allow users to access an existing LRO.
 
@@ -824,24 +826,27 @@ The exception is available in ```Azure.Core``` package:
 ```csharp
 public class RequestFailedException : Exception {
 
-    public RequestFailedException(int status, string message);
-    public RequestFailedException(int status, string message, Exception innerException);
+    public RequestFailedException(Response response);
+    public RequestFailedException(Response response, Exception innerException);
+    public RequestFailedException(Response response, Exception innerException, RequestFailedDetailsParser detailsParser);
 
     public int Status { get; }
 }
 ```
 
-{% include requirement/SHOULD id="dotnet-errors-response-exception-extensions" %} use `ResponseExceptionExtensions` to create `RequestFailedException` instances.
-
-The exception message should contain detailed response information.  For example:
+The exception message will be formed from the passed in `Response` content. For example:
 
 ```csharp
 if (response.Status != 200) {
-    throw await response.CreateRequestFailedExceptionAsync(message);
+    throw new RequestFailedException(response);
 }
 ```
 
 {% include requirement/MUST id="dotnet-errors-use-response-failed-when-possible" %} use `RequestFailedException` or one of its subtypes where possible.
+
+{% include requirement/MUST id="dotnet-request-failed-details-parser" %} provide `RequestFailedDetailsParser` for non-standard error formats.
+
+If customization is required to parse the response content, e.g. because the service does not adhere to the standard error format as represented by the `ResponseError` type, libraries can must implement a `RequestFailedDetailsParser` and pass the parser into the construction of the `HttpPipeline` via the `HttpPipelineOptions` type. If more granular control is required than associating the parser per pipeline, there is a constructor of `RequestFailedException` that takes a `RequestFailedDetailsParser` that may be used.
 
 Don't introduce new exception types unless there's a programmatic scenario for handling the new exception that's different than `RequestFailedException`
 
@@ -953,7 +958,7 @@ ConfigurationSetting setting = client.Get("Key");
 Assert.AreEqual("Value", setting.Value);
 ```
 
-Review the [full sample](https://github.com/Azure/azure-sdk-for-net/blob/main/sdk/appconfiguration/Azure.Data.AppConfiguration/samples/Sample7_MockClient.md) in the GitHub repository.
+For more details on mocking, see [Unit testing and mocking with the Azure SDK for .NET](https://learn.microsoft.com/dotnet/azure/sdk/unit-testing-mocking).
 
 {% include requirement/MUST id="dotnet-mocking-constructor" %} provide protected parameterless constructor for mocking.
 
@@ -1036,9 +1041,13 @@ For example, if the component is in the `Azure.Storage.Blobs` namespace, the com
 
 Use the following target setting in the `.csproj` file:
 
-```
+```xml
 <TargetFramework>netstandard2.0</TargetFramework>
 ```
+
+{% include requirement/MUST id="dotnet-build-multi-targeting-api" %} define the same APIs for all [target framework monikers (TFMs)][.NET Target Framework Monikers].
+
+You may multi-target client libraries to different [TFMs][.NET Target Framework Monikers] but the public API must be the same for all targets including class, interface, parameter, and return types.
 
 #### Common Libraries
 
@@ -1091,7 +1100,7 @@ Use _-beta._N_ suffix for beta package versions. For example, _1.0.0-beta.2_.
 * `Microsoft.BCL.AsyncInterfaces`.
 * packages produced by your own team.
 
-In the past, [JSON.NET] was commonly used for serialization and deserialization. Use the [System.Text.Json](https://www.nuget.org/packages/System.Text.Json/)
+In the past, [JSON.NET](https://www.newtonsoft.com/json), aka Newtonsoft.Json, was commonly used for serialization and deserialization. Use the [System.Text.Json](https://www.nuget.org/packages/System.Text.Json/)
 package that is now a part of the .NET platform instead.
 
 {% include requirement/MUSTNOT id="dotnet-dependencies-exposing" %} publicly expose types from dependencies unless the types follow these guidelines as well.

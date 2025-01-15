@@ -1,10 +1,5 @@
 {% assign version = item[include.version] %}
 
-<!-- For deprecated packages we just want whichever version we have it doesn't matter if it is GA or preview -->
-{% if version == "" and item.Support == "deprecated" %}
-    {% assign version = item.VersionPreview %}
-{% endif %}
-
 {% if version != "" %}
     {% assign url = package_url | replace: 'item.Version', version  %}
     <div>
@@ -21,7 +16,7 @@
     {% assign code_url = source_url | replace: 'item.Package', item.Package | replace: 'item.TrimmedPackage', trimmedPackage | replace: 'item.Version', version %}
     {% include releases/pkgbadge.md label="Code" url=code_url version=version preview=include.preview %}
 
-    {% if include.version == "VersionGA" %}
+    {% if item.MSDocs != "NA" %}
         {% assign msdocs_url = item.MSDocs %}
         {% if item.MSDocs == "" %}
             {% assign msdocs_url = msdocs_url_template | replace: 'item.Package', item.Package | replace: 'item.TrimmedPackage', trimmedPackage %}
@@ -29,7 +24,6 @@
                 {% assign msdocs_url = msdocs_url | append: pre_suffix %}
             {% endif %}
         {% endif %}
-        {% assign msdocs_url = msdocs_url | replace: 'item.Version', version %}
         {% if code_url != "" and code_url != "NA" and msdocs_url != "" and msdocs_url != "NA" %}
             &nbsp;|&nbsp;
         {% endif %}
