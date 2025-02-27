@@ -86,7 +86,7 @@ function CheckOptionalLinks($linkTemplates, $pkg, $skipIfNA = $false)
   if (!$skipIfNA -or $pkg.MSDocs -eq "")
   {
     $preSuffix = GetLinkTemplateValue $linkTemplates "pre_suffix"
-    $msdocLink = GetLinkTemplateValue $linkTemplates "msdocs_url_template" $pkg.Package $pkg.VersionGA
+    $msdocLink = GetLinkTemplateValue $linkTemplates "msdocs_url_template" $pkg.Package
 
     if (!$pkg.VersionGA -and $pkg.VersionPreview -and $preSuffix) {
       $msdocLink += $preSuffix
@@ -103,6 +103,13 @@ function CheckOptionalLinks($linkTemplates, $pkg, $skipIfNA = $false)
         $pkg.MSDocs = "NA"
       }
     }
+  }
+
+  # We always perfer to the MSDoc links over GHDocs so they will never be displayed if MSDoc is setup so we
+  # don't need to worry about checking the GHDoc links unless MSDocs is NA.
+  if ($pkg.MSDocs -ne "NA") 
+  {
+    return
   }
 
   if (!$skipIfNA -or $pkg.GHDocs -eq "")
@@ -151,7 +158,7 @@ function CheckRequiredLinks($linkTemplates, $pkg, $version)
   return $valid
 }
 
-function GetFirstGADate($pkgVersion, $pkg, $gaVersions)
+function GetFirstGADate($pkg, $gaVersions)
 {
   if ($gaVersions.Count -gt 0) {
     $gaIndex = $gaVersions.Count - 1;
@@ -168,11 +175,39 @@ function GetFirstGADate($pkgVersion, $pkg, $gaVersions)
     }
     if ($gaIndex -lt 0) { return "" }
     $gaVersion = $gaVersions[$gaIndex]
-    $committeDate = $gaVersion.Date
+    $committeDate = $gaVersion.Date -as [DateTime]
 
-    if ($committeDate -is [DateTime]) {
+    if ($committeDate) {
       $committeDate = $committeDate.ToString("MM/dd/yyyy")
       Write-Host "For package '$($pkg.Package)' picking GA '$($gaVersion.RawVersion)' shipped on '$committeDate' as the first new GA date."
+      return $committeDate
+    }
+  }
+  return ""
+}
+
+function GetFirstPreviewDate($pkg, $previewVersions)
+{
+  if ($previewVersions.Count -gt 0) {
+    $previewIndex = $previewVersions.Count - 1;
+    $otherPackage = $global:otherPackages.Where({ $_.Package -eq $pkg.Package })
+
+    if ($otherPackage.Count -gt 0 -and $otherPackage[0].VersionPreview) {
+      Write-Verbose "Found other package entry for '$($pkg.Package)'";
+      for ($i = 0; $i -lt $previewVersions.Count; $i++) {
+        if ($otherPackage[0].VersionPreview -eq $previewVersions[$i].RawVersion) {
+          Write-Verbose "Found older package entry for '$($pkg.Package)' Preview version of $($otherPackage[0].VersionPreview) so picking the next Preview for first Preview date."
+          $gaIndex = ($i - 1)
+        }
+      }
+    }
+    if ($previewIndex -lt 0) { return "" }
+    $previewVersion = $previewVersions[$previewIndex]
+    $committeDate = $previewVersion.Date -as [DateTime]
+
+    if ($committeDate) {
+      $committeDate = $committeDate.ToString("MM/dd/yyyy")
+      Write-Host "For package '$($pkg.Package)' picking Preview '$($previewVersion.RawVersion)' shipped on '$committeDate' as the first new Preview date."
       return $committeDate
     }
   }
@@ -192,7 +227,7 @@ function Update-Packages($lang, $packageList, $langVersions, $langLinkTemplates)
       $pkgVersion = $langVersions[""]
     }
 
-    if ($null -eq $pkgVersion) {
+    if ($null -eq $pkgVersion -or !$pkgVersion.Versions) {
       Write-Verbose "Skipping update for $($pkg.Package) as we don't have version info for it. "
       CheckOptionalLinks $langLinkTemplates $pkg
       continue;
@@ -209,6 +244,7 @@ function Update-Packages($lang, $packageList, $langVersions, $langLinkTemplates)
     $versions = [AzureEngSemanticVersion]::SortVersions($versions)
 
     $latestPreview = $versions[0].RawVersion
+    $previewVersions = $versions.Where({ $_.IsPrerelease })
     $gaVersions = $versions.Where({ !$_.IsPrerelease })
     if ($gaVersions.Count -ne 0)
     {
@@ -233,7 +269,7 @@ function Update-Packages($lang, $packageList, $langVersions, $langLinkTemplates)
     }
     elseif ($pkg.VersionGA -ne $version) {
       if (CheckRequiredLinks $langLinkTemplates $pkg $version){
-        Write-Host "Updating VersionGA $($pkg.Package) from $($pkg.VersionGA) to $version"
+        Write-Host "Updating VersionGA for '$($pkg.Package)' from '$($pkg.VersionGA)' to '$version'"
         $pkg.VersionGA = $version;
       }
       else {
@@ -243,11 +279,16 @@ function Update-Packages($lang, $packageList, $langVersions, $langLinkTemplates)
 
     if ($pkg.VersionGA) {
       if (!$pkg.FirstGADate) {
-        $pkg.FirstGADate = GetFirstGADate $pkgVersion $pkg $gaVersions
+        $pkg.FirstGADate = GetFirstGADate $pkg $gaVersions
       }
-      $pkg.LatestGADate = $latestGADate
+      if ($latestGADate) {
+        $pkg.LatestGADate = $latestGADate
+      }
     }
 
+    if (!$pkg.FirstPreviewDate) {
+      $pkg.FirstPreviewDate = GetFirstPreviewDate $pkg $previewVersions
+    }
     $version = $latestPreview
 
     if ($compareTagVsGHIOVersions) {
@@ -261,7 +302,7 @@ function Update-Packages($lang, $packageList, $langVersions, $langLinkTemplates)
     }
     elseif ($pkg.VersionPreview -ne $version) {
       if (CheckRequiredlinks $langLinkTemplates $pkg $version) {
-        Write-Host "Updating VersionPreview $($pkg.Package) from $($pkg.VersionPreview) to $version"
+        Write-Host "Updating VersionPreview for '$($pkg.Package)' from '$($pkg.VersionPreview)' to '$version'"
         $pkg.VersionPreview = $version;
       }
       else {
@@ -286,6 +327,7 @@ function OutputVersions($lang)
   Write-Host "Checking doc links for other packages"
   foreach ($otherPackage in $otherPackages)
   {
+    if ($otherPackage.Hide) { continue }
     CheckOptionalLinks $langLinkTemplates $otherPackage -skipIfNA $true
   }
 
@@ -309,7 +351,35 @@ function CheckAll($langs)
   {
     $clientPackages, $_ = Get-PackageListForLanguageSplit $lang
     $csvFile = Get-LangCsvFilePath $lang
-
+    $allClientPackages = Get-PackageListForLanguage $lang
+ 
+    foreach ($pkg in $allClientPackages){
+      if(($pkg.Support -eq "deprecated")) {
+        if (!$pkg.EOLDate -or $pkg.EOLDate -eq "NA")
+        {
+          Write-Warning "No EOLDate specified for deprecated package '$($pkg.Package)' in $csvFile."
+          $foundIssues = $true
+        }
+        if (!$pkg.Replace)
+        {
+          Write-Warning "No replacement package specified for deprecated package '$($pkg.Package)' in $csvFile."
+          Write-Warning "If the package name hasn't changed, copy the package name to the replacement library field."
+          $foundIssues = $true
+        }
+        # If a replacement package exists, check if the replacement name matches the deprecated name.
+        # Skip the migration guide check if the names are the same.
+        elseif ($pkg.Replace -ne $pkg.Package)
+        {
+          if (!$pkg.ReplaceGuide)
+          {
+            Write-Warning "No migration guide set for deprecated package '$($pkg.Package)' in $csvFile."
+            Write-Warning "Migration guide link should adhere to the following convention 'aka.ms/azsdk/<language>/migrate/<library>'"
+            $foundIssues = $true
+          }
+        }
+      }
+    }
+    
     foreach ($pkg in $clientPackages)
     {
       $serviceNames += [PSCustomObject][ordered]@{
@@ -373,7 +443,37 @@ function CheckAll($langs)
   }
 }
 
-if ($language -eq 'check') {
+function DumpAllShippedPackage()
+{
+  $packageList = @()
+  foreach ($lang in $languageNameMapping.Keys)
+  {
+    $langName = Get-LanguageName $lang
+
+    $packageVersions = GetPackageVersions $lang -afterDate ([DateTime]::Now.AddYears(-10))
+    Write-Host "Found $($packageVersions.Values.Count) packages for language $langName"
+
+    foreach ($pkg in $packageVersions.Values)
+    {
+      foreach ($pkgVersion in $pkg.Versions) 
+      {
+        $packageList += [PSCustomObject][ordered]@{
+          Language = $langName
+          Package = $pkg.Package
+          Version = $pkgVersion.RawVersion
+          Date = $pkgVersion.Date
+        }
+      }
+    }
+  }
+
+  Set-Content -Path "shipped-packages.csv" -Value ($packageList | ConvertTo-Csv -NoTypeInformation)
+}
+
+if ($language -eq "allShipped") {
+  DumpAllShippedPackage
+}
+elseif ($language -eq 'check') {
   CheckAll $languageNameMapping.Keys
 }
 elseif ($language -eq 'all') {
